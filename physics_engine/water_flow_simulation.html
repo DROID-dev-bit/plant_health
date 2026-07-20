@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Water Flow Physics Engine — Farm Terrain</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3;
+    --dim:#8b949e; --accent:#58a6ff; --water:#4fc3f7;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;
+       display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  header{padding:10px 18px;border-bottom:1px solid var(--border);display:flex;
+         align-items:baseline;gap:14px;flex-wrap:wrap}
+  header h1{font-size:17px;font-weight:600}
+  header .sub{color:var(--dim);font-size:12px}
+  #main{flex:1;display:flex;min-height:0}
+  #canvasWrap{flex:1;display:flex;align-items:center;justify-content:center;
+              position:relative;background:#010409;min-width:0}
+  canvas{image-rendering:pixelated;cursor:crosshair;max-width:100%;max-height:100%}
+  #hud{position:absolute;left:12px;top:10px;background:rgba(13,17,23,.85);
+       border:1px solid var(--border);border-radius:8px;padding:8px 12px;
+       font-size:12px;color:var(--dim);pointer-events:none;min-width:190px}
+  #hud b{color:var(--text)}
+  #side{width:270px;border-left:1px solid var(--border);background:var(--panel);
+        padding:16px;overflow-y:auto;flex-shrink:0}
+  .sec{margin-bottom:20px}
+  .sec h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+          color:var(--dim);margin-bottom:10px}
+  button{background:#21262d;color:var(--text);border:1px solid var(--border);
+         border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;width:100%;
+         margin-bottom:8px;transition:background .15s}
+  button:hover{background:#30363d}
+  button.active{background:#1f6feb;border-color:#1f6feb}
+  label{display:flex;justify-content:space-between;align-items:center;
+        font-size:13px;margin-bottom:10px;gap:8px}
+  input[type=range]{width:130px;accent-color:var(--accent)}
+  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px;cursor:pointer}
+  .toggle input{accent-color:var(--accent)}
+  .legend{font-size:12px;color:var(--dim)}
+  .legend .row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .sw{width:26px;height:10px;border-radius:2px;flex-shrink:0}
+  .stat{display:flex;justify-content:space-between;font-size:12.5px;
+        color:var(--dim);margin-bottom:5px}
+  .stat b{color:var(--text);font-variant-numeric:tabular-nums}
+  .hint{font-size:11.5px;color:var(--dim);margin-top:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>💧 Water Flow Physics Engine</h1>
+  <span class="sub" id="meta">loading terrain…</span>
+</header>
+<div id="main">
+  <div id="canvasWrap">
+    <canvas id="cv"></canvas>
+    <div id="hud">hover terrain for details</div>
+  </div>
+  <div id="side">
+    <div class="sec">
+      <h2>Simulation</h2>
+      <button id="btnRain" class="active">🌧 Rain: ON</button>
+      <button id="btnReset">↺ Reset water</button>
+      <label>Rain intensity <input type="range" id="rain" min="0" max="100" value="55"></label>
+      <label>Flow speed <input type="range" id="speed" min="1" max="10" value="4"></label>
+      <div class="hint">🖱 Click / drag on the map to pour water at that spot.</div>
+    </div>
+    <div class="sec">
+      <h2>Layers</h2>
+      <label class="toggle"><input type="checkbox" id="lyrChan" checked> Drainage channels (D8)</label>
+      <label class="toggle"><input type="checkbox" id="lyrDepth" checked> Ponding depth</label>
+      <label class="toggle"><input type="checkbox" id="lyrPart" checked> Water particles</label>
+      <label class="toggle"><input type="checkbox" id="lyrCanopy"> Canopy (DSM−DTM)</label>
+      <label class="toggle"><input type="checkbox" id="lyrContour" checked> Contours (1 m)</label>
+    </div>
+    <div class="sec">
+      <h2>Live stats</h2>
+      <div class="stat"><span>Active particles</span><b id="stP">0</b></div>
+      <div class="stat"><span>Ponded cells</span><b id="stW">0</b></div>
+      <div class="stat"><span>Max pond depth</span><b id="stD">0 cm</b></div>
+      <div class="stat"><span>Sim rate</span><b id="stF">– fps</b></div>
+    </div>
+    <div class="sec">
+      <h2>Legend</h2>
+      <div class="legend">
+        <div class="row"><div class="sw" style="background:linear-gradient(90deg,#3b2d1f,#7a6a4f,#cfc09a)"></div>low → high ground</div>
+        <div class="row"><div class="sw" style="background:linear-gradient(90deg,rgba(79,195,247,.25),#0288d1)"></div>shallow → deep water</div>
+        <div class="row"><div class="sw" style="background:#66d9ff"></div>flowing particle</div>
+        <div class="row"><div class="sw" style="background:rgba(88,166,255,.55)"></div>drainage channel</div>
+        <div class="row"><div class="sw" style="background:rgba(46,125,50,.6)"></div>canopy height</div>
+      </div>
+    </div>
+    <div class="sec">
+      <h2>How it works</h2>
+      <div class="hint">
+        Ground = drone DTM (1 m grid). Rain drops become particles that
+        accelerate down the steepest slope (gravity − friction), carve along
+        D8 drainage lines, and pond in depressions using a shallow-water
+        height field. Blue channels = computed flow accumulation.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="terrain_data.js"></script>
+<script>
+"use strict";
+// ───────────────────────── terrain ─────────────────────────
+const W = TERRAIN.width, H = TERRAIN.height, CELL = TERRAIN.cell_m;
+const Z   = Float32Array.from(TERRAIN.elevation.flat());
+const ZF  = Float32Array.from(TERRAIN.elevation_filled.flat());
+const ACC = Float32Array.from(TERRAIN.flow_acc.flat());
+const CAN = Float32Array.from(TERRAIN.canopy.flat());
+const VAL = Uint8Array.from(TERRAIN.valid.flat());
+const zmin = TERRAIN.elev_min, zmax = TERRAIN.elev_max;
+const accMax = ACC.reduce((a,b)=>Math.max(a,b),0);
+document.getElementById('meta').textContent =
+  `DTM ${W}×${H} @ ${CELL} m/cell · elev ${zmin}–${zmax} m · EPSG:32647 (drone survey 2026-06-28)`;
+
+const idx=(x,y)=>y*W+x;
+// bilinearly interpolated water-surface elevation (ground + pond depth):
+// smooth sub-cell physics instead of stair-stepped nearest-cell lookups.
+function surfAt(fx,fy,water){
+  const x0=Math.max(0,Math.min(W-2,Math.floor(fx))), y0=Math.max(0,Math.min(H-2,Math.floor(fy)));
+  const tx=Math.min(1,Math.max(0,fx-x0)), ty=Math.min(1,Math.max(0,fy-y0));
+  const s=i=>Z[i]+(water?water[i]:0);
+  return s(idx(x0,y0))*(1-tx)*(1-ty)+s(idx(x0+1,y0))*tx*(1-ty)
+       + s(idx(x0,y0+1))*(1-tx)*ty +s(idx(x0+1,y0+1))*tx*ty;
+}
+// central-difference gradient of the bilinear surface (water flows off water)
+function grad(fx,fy,water){
+  const h=0.5;
+  return [ (surfAt(fx+h,fy,water)-surfAt(fx-h,fy,water))/(2*h*CELL),
+           (surfAt(fx,fy+h,water)-surfAt(fx,fy-h,water))/(2*h*CELL) ];
+}
+
+// ───────────────────── water state ─────────────────────
+const depth = new Float32Array(W*H);        // ponded water depth (m)
+const depthB = new Float32Array(W*H);       // double buffer (unbiased spread)
+let particles = [];                          // {x,y,vx,vy,vol,age}
+const MAXP = 45000;
+const G=9.81, FRICTION=1.6, DT=0.05, SUB=2;  // SUB physics substeps / step
+const STALL=0.02, DROP_VOL=0.0025;
+const INFILTRATION=0.000018;                 // m per pond step (soil soak)
+
+function spawnRain(n){
+  for(let i=0;i<n && particles.length<MAXP;i++){
+    const x=Math.random()*W, y=Math.random()*H;
+    if(VAL[idx(Math.floor(x),Math.floor(y))])
+      particles.push({x,y,vx:0,vy:0,vol:DROP_VOL,age:0});
+  }
+}
+function pour(cx,cy){
+  for(let i=0;i<120 && particles.length<MAXP;i++){
+    const a=Math.random()*Math.PI*2, r=Math.random()*2.5;
+    particles.push({x:cx+Math.cos(a)*r, y:cy+Math.sin(a)*r, vx:0, vy:0,
+                    vol:DROP_VOL*2, age:0});
+  }
+}
+
+function stepParticles(speed){
+  const alive=[];
+  for(const p of particles){
+    for(let s=0;s<speed;s++){
+      // sub-stepped semi-implicit Euler: stable at higher speeds
+      for(let k=0;k<SUB;k++){
+        const [gx,gy]=grad(p.x,p.y,depth);
+        p.vx += (-G*gx - FRICTION*p.vx)*(DT/SUB);
+        p.vy += (-G*gy - FRICTION*p.vy)*(DT/SUB);
+        // cap step to <1 cell per substep (CFL) so drops never tunnel ridges
+        let dx=p.vx*(DT/SUB)/CELL, dy=p.vy*(DT/SUB)/CELL;
+        const m=Math.hypot(dx,dy);
+        if(m>0.9){dx*=0.9/m; dy*=0.9/m;}
+        p.x+=dx; p.y+=dy;
+      }
+      p.age++;
+      if(p.x<1||p.x>W-2||p.y<1||p.y>H-2){p.dead=true;break}   // drains off-field
+      const xi=Math.round(p.x), yi=Math.round(p.y), ci=idx(xi,yi);
+      // landing on an existing pond: merge into it (rain on water surface)
+      if(depth[ci]>0.004 && p.age>4){
+        depth[ci]+=p.vol; p.dead=true; break;
+      }
+      // stalled in a local hollow -> pond (age guard lets fresh drops start)
+      if(p.age>6 && Math.hypot(p.vx,p.vy)<STALL){
+        depth[ci]+=p.vol; p.dead=true; break;
+      }
+    }
+    if(!p.dead)alive.push(p);
+  }
+  particles=alive;
+}
+
+// shallow-water relaxation, double-buffered (no scan-order bias):
+// each cell pushes water toward lower neighbouring water surfaces,
+// flux-limited so total volume is conserved.
+const NB8=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+function stepPonds(){
+  depthB.set(depth);
+  for(let y=1;y<H-1;y++){
+    const yw=y*W;
+    for(let x=1;x<W-1;x++){
+      const i=yw+x, d=depth[i];
+      if(d<=0.0004)continue;
+      const hs=Z[i]+d;
+      // collect positive head differences to all 8 neighbours
+      let tot=0; const diffs=[];
+      for(let n=0;n<8;n++){
+        const j=idx(x+NB8[n][0],y+NB8[n][1]);
+        const df=hs-(Z[j]+depth[j]);
+        if(df>0.0005){diffs.push([j,df]);tot+=df;}
+      }
+      if(!tot)continue;
+      // move up to half the excess head, split ∝ head difference
+      const movable=Math.min(d,tot*0.5*0.45);
+      for(const[j,df]of diffs){
+        const m=movable*df/tot;
+        depthB[i]-=m; depthB[j]+=m;
+      }
+    }
+  }
+  // infiltration + edge drainage, then swap
+  for(let i=0;i<depth.length;i++){
+    let v=depthB[i]-INFILTRATION;
+    depth[i]=v>0?v:0;
+  }
+  for(let x=0;x<W;x++){depth[x]=0;depth[idx(x,H-1)]=0;}
+  for(let y=0;y<H;y++){depth[idx(0,y)]=0;depth[idx(W-1,y)]=0;}
+}
+
+// pond overflow -> kinetic re-release: where a pond's surface sits clearly
+// above a lower dry neighbour, convert some volume back into moving particles
+// so overtopped depressions visibly spill and continue downstream.
+function stepOverflow(){
+  if(particles.length>MAXP-200)return;
+  for(let t=0;t<250;t++){
+    const x=1+(Math.random()*(W-2))|0, y=1+(Math.random()*(H-2))|0, i=idx(x,y);
+    if(depth[i]<0.02)continue;
+    const hs=Z[i]+depth[i];
+    for(const[dx,dy]of NB8){
+      const j=idx(x+dx,y+dy);
+      if(depth[j]<0.002 && hs-Z[j]>0.03){
+        const vol=Math.min(depth[i]*0.3,0.01);
+        depth[i]-=vol;
+        particles.push({x:x+dx*0.6,y:y+dy*0.6,
+                        vx:dx*0.3,vy:dy*0.3,vol,age:7});
+        break;
+      }
+    }
+  }
+}
+
+// ───────────────────── rendering ─────────────────────
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const SC=Math.max(2,Math.floor(Math.min((innerWidth-320)/W,(innerHeight-90)/H)));
+cv.width=W*SC; cv.height=H*SC;
+
+// static base: hillshade + hypsometric tint + channels + contours (offscreen)
+function buildBase(showChan,showCanopy,showContour){
+  const off=document.createElement('canvas'); off.width=W; off.height=H;
+  const octx=off.getContext('2d'), img=octx.createImageData(W,H);
+  const L=[-0.6,-0.6,0.53];                                    // NW light
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=idx(x,y), o=i*4;
+    if(!VAL[i]){img.data[o+3]=0;continue}
+    const zx=(Z[idx(Math.min(W-1,x+1),y)]-Z[idx(Math.max(0,x-1),y)])/(2*CELL);
+    const zy=(Z[idx(x,Math.min(H-1,y+1))]-Z[idx(x,Math.max(0,y-1))])/(2*CELL);
+    let nl=(-zx*L[0]-zy*L[1]+L[2])/Math.hypot(zx,zy,1)/Math.hypot(...L);
+    nl=Math.max(0,Math.min(1,nl));
+    const t=(Z[i]-zmin)/(zmax-zmin);
+    let r=59+t*148, g=45+t*147, b=31+t*123;                    // brown->tan ramp
+    const sh=0.35+0.75*nl; r*=sh; g*=sh; b*=sh;
+    if(showCanopy && CAN[i]>0.15){                             // vegetation tint
+      const c=Math.min(1,CAN[i]/1.5);
+      r=r*(1-c*0.55)+30*c*0.55; g=g*(1-c*0.55)+125*c*0.55; b=b*(1-c*0.55)+42*c*0.55;
+    }
+    if(showChan){                                              // drainage lines
+      const a=ACC[i]/accMax;
+      if(a>0.42){const w=Math.min(1,(a-0.42)/0.4);
+        r=r*(1-w*.7)+70*w*.7; g=g*(1-w*.7)+150*w*.7; b=b*(1-w*.7)+255*w*.7;}
+    }
+    if(showContour && Math.abs(Z[i]-Math.round(Z[i]))<0.035){r*=.72;g*=.72;b*=.72}
+    img.data[o]=r; img.data[o+1]=g; img.data[o+2]=b; img.data[o+3]=255;
+  }
+  octx.putImageData(img,0,0);
+  return off;
+}
+let base=buildBase(true,false,true);
+
+// water depth layer rendered into its own ImageData (fast at any pond size)
+const waterCv=document.createElement('canvas'); waterCv.width=W; waterCv.height=H;
+const waterCtx=waterCv.getContext('2d');
+const waterImg=waterCtx.createImageData(W,H);
+function renderWaterLayer(){
+  const px=waterImg.data;
+  for(let i=0;i<W*H;i++){
+    const d=depth[i], o=i*4;
+    if(d>0.0015){
+      const t=Math.min(1,d*5);                    // shallow->deep ramp
+      px[o]  =70-40*t;                            // R: 70 -> 30
+      px[o+1]=160-85*t;                           // G: 160 -> 75
+      px[o+2]=225+30*t;                           // B: 225 -> 255
+      px[o+3]=Math.min(235,55+d*2400);            // alpha with depth
+    }else px[o+3]=0;
+  }
+  waterCtx.putImageData(waterImg,0,0);
+}
+function render(showDepth,showPart){
+  ctx.imageSmoothingEnabled=false;
+  ctx.fillStyle='#010409'; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.drawImage(base,0,0,cv.width,cv.height);
+  if(showDepth){
+    renderWaterLayer();
+    ctx.drawImage(waterCv,0,0,cv.width,cv.height);
+  }
+  if(showPart){
+    ctx.fillStyle='#8fe3ff';
+    for(const p of particles){
+      const sp=Math.hypot(p.vx,p.vy);
+      if(sp>0.35){                        // fast drops draw a short streak
+        ctx.fillRect(p.x*SC-1,p.y*SC-1,2,2);
+        ctx.fillRect(p.x*SC-1-p.vx*2.4,p.y*SC-1-p.vy*2.4,1.6,1.6);
+      }else ctx.fillRect(p.x*SC-1,p.y*SC-1,2,2);
+    }
+  }
+}
+
+// ───────────────────── UI ─────────────────────
+let raining=true;
+const $=id=>document.getElementById(id);
+$('btnRain').onclick=e=>{raining=!raining;
+  e.target.textContent=raining?'🌧 Rain: ON':'🌧 Rain: OFF';
+  e.target.classList.toggle('active',raining);};
+$('btnReset').onclick=()=>{depth.fill(0);particles=[];};
+const rebuild=()=>{base=buildBase($('lyrChan').checked,$('lyrCanopy').checked,$('lyrContour').checked);};
+['lyrChan','lyrCanopy','lyrContour'].forEach(id=>$(id).onchange=rebuild);
+
+let mouse=null,down=false;
+cv.onmousedown=e=>{down=true;pourAt(e)};
+cv.onmouseup=()=>down=false;
+cv.onmouseleave=()=>{down=false;mouse=null;$('hud').textContent='hover terrain for details'};
+cv.onmousemove=e=>{
+  const r=cv.getBoundingClientRect();
+  const x=(e.clientX-r.left)/r.width*W, y=(e.clientY-r.top)/r.height*H;
+  mouse=[x,y]; if(down)pourAt(e);
+  const xi=Math.floor(x),yi=Math.floor(y);
+  if(xi>=0&&xi<W&&yi>=0&&yi<H&&VAL[idx(xi,yi)]){
+    const i=idx(xi,yi);
+    $('hud').innerHTML=`elev <b>${Z[i].toFixed(2)} m</b> · water <b>${(depth[i]*100).toFixed(1)} cm</b><br>`+
+      `upstream <b>${Math.round(Math.expm1(ACC[i]))} m²</b> · canopy <b>${CAN[i].toFixed(2)} m</b><br>`+
+      `cell ${xi},${yi}`;
+  }
+};
+function pourAt(e){
+  const r=cv.getBoundingClientRect();
+  pour((e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H);
+}
+
+// ───────────────────── main loop ─────────────────────
+let last=performance.now(),frames=0,fpsT=last;
+function loop(now){
+  const rainAmt=+$('rain').value, speed=+$('speed').value;
+  if(raining&&rainAmt>0)spawnRain(Math.round(rainAmt*4.5));
+  stepParticles(speed);
+  stepPonds();
+  stepOverflow();
+  render($('lyrDepth').checked,$('lyrPart').checked);
+  frames++;
+  if(now-fpsT>500){
+    $('stF').textContent=Math.round(frames*1000/(now-fpsT))+' fps';
+    frames=0;fpsT=now;
+    $('stP').textContent=particles.length.toLocaleString();
+    let wc=0,md=0;for(let i=0;i<depth.length;i++){if(depth[i]>0.002)wc++;if(depth[i]>md)md=depth[i];}
+    $('stW').textContent=wc.toLocaleString();
+    $('stD').textContent=(md*100).toFixed(1)+' cm';
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

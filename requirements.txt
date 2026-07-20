@@ -1,7 +1,0 @@
-rasterio
-pyproj
-numpy
-pandas
-scikit-learn
-xgboost
-lightgbm

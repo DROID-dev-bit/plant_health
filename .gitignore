@@ -1,23 +1,16 @@
+# OS
+.DS_Store
+__MACOSX/
+
+# Python
 __pycache__/
 *.pyc
-*.pyo
-.Python
-*.egg-info/
-dist/
-build/
-.env
-venv/
-env/
-models/*.pkl
-models/*.joblib
-models/*.h5
-models/*.pt
-outputs/
-.DS_Store
-.ipynb_checkpoints/
-*.tif
-*.TIF
-*.csv
-*.geojson
-*.log
-push_to_github.sh
+.venv/
+.ruff_cache/
+
+# Local tool state
+.claude/
+
+# Redundant archives (contents already extracted alongside these)
+maps_2.zip
+final_pipeline.zip
